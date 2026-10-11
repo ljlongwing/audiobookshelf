@@ -251,6 +251,11 @@ class LibraryScanner {
           }
         }
       )
+
+      // Relink media progress to a matching library item that was already scanned in (e.g. item was copied before it was removed)
+      for (const missingLibraryItem of existingLibraryItems.filter((li) => libraryItemIdsMissing.includes(li.id))) {
+        await Database.mediaProgressModel.relinkToPresentItem(missingLibraryItem)
+      }
     }
 
     if (this.shouldCancelScan(libraryScan)) return true
@@ -621,6 +626,7 @@ class LibraryScanner {
             Logger.info(`[LibraryScanner] Scanning file update group and library item was deleted "${existingLibraryItem.media.title}" - marking as missing`)
             existingLibraryItem.isMissing = true
             await existingLibraryItem.save()
+            await Database.mediaProgressModel.relinkToPresentItem(existingLibraryItem)
             SocketAuthority.libraryItemEmitter('item_updated', existingLibraryItem)
 
             itemGroupingResults[itemDir] = ScanResult.REMOVED

@@ -446,6 +446,11 @@ class BookScanner {
       await existingLibraryItem.save()
     }
 
+    // Relink media progress to a matching library item that was already scanned in (e.g. files were copied before they were removed)
+    if (hasNoMediaFiles) {
+      await Database.mediaProgressModel.relinkToPresentItem(existingLibraryItem)
+    }
+
     libraryScan.seriesRemovedFromBooks.push(...bookSeriesRemoved)
     libraryScan.authorsRemovedFromBooks.push(...bookAuthorsRemoved)
 

@@ -48,7 +48,7 @@ describe('MediaProgress.relinkFromMissingItems', () => {
     })
   }
 
-  async function createBookItem({ title, asin = null, duration = 100, audioFiles = [af(1000)], authors = [], isMissing = false, withItem = true }) {
+  async function createBookItem({ title, asin = null, duration = 100, audioFiles = [af(1000)], authors = [], isMissing = false, withItem = true, createdAt = undefined }) {
     const book = await Database.bookModel.create({
       title,
       asin,
@@ -69,6 +69,7 @@ describe('MediaProgress.relinkFromMissingItems', () => {
         libraryId: library.id,
         libraryFolderId: libraryFolder.id,
         isMissing,
+        createdAt,
         libraryFiles: []
       })
     }
@@ -226,5 +227,125 @@ describe('MediaProgress.relinkFromMissingItems', () => {
 
     await progress.reload()
     expect(progress.mediaItemId).to.equal(otherBook.id)
+  })
+
+  /**
+   * The other direction: the copy was scanned in as a new item while the original was still there, and the
+   * original is set as missing later.
+   */
+  describe('relinkToPresentItem', () => {
+    const OLD = new Date('2024-01-01T00:00:00Z')
+    const NEW = new Date('2024-06-01T00:00:00Z')
+
+    const relinkToPresent = (missingItemId) => Database.libraryItemModel.findByPk(missingItemId).then((missingItem) => Database.mediaProgressModel.relinkToPresentItem(missingItem))
+
+    it('relinks progress from a missing item to a newer present item matched by file fingerprint', async () => {
+      const user = await createUser('reader')
+      const { book: oldBook, item: oldItem } = await createBookItem({ title: 'Raw Tag Title', audioFiles: [af(111), af(222)], isMissing: true, createdAt: OLD })
+      const progress = await createProgress(user.id, oldBook)
+      const { book: newBook, item: newItem } = await createBookItem({ title: 'Curated Title', audioFiles: [af(222), af(111)], createdAt: NEW })
+
+      await relinkToPresent(oldItem.id)
+
+      await progress.reload()
+      expect(progress.mediaItemId).to.equal(newBook.id)
+      expect(progress.extraData.libraryItemId).to.equal(newItem.id)
+      expect(progress.isFinished).to.be.true
+      expect(Logger.error.called).to.be.false
+    })
+
+    it('relinks progress to a newer present item matched by ASIN', async () => {
+      const user = await createUser('reader')
+      const { book: oldBook, item: oldItem } = await createBookItem({ title: 'Old', asin: 'B0ASINMATCH', audioFiles: [af(9)], isMissing: true, createdAt: OLD })
+      const progress = await createProgress(user.id, oldBook)
+      const { book: newBook } = await createBookItem({ title: 'New', asin: 'b0asinmatch', audioFiles: [af(1234)], createdAt: NEW })
+
+      await relinkToPresent(oldItem.id)
+
+      await progress.reload()
+      expect(progress.mediaItemId).to.equal(newBook.id)
+    })
+
+    it('does not relink to a present item that is older than the missing item', async () => {
+      const user = await createUser('reader')
+      await createBookItem({ title: 'Same Book', audioFiles: [af(111)], createdAt: OLD })
+      const { book: missingBook, item: missingItem } = await createBookItem({ title: 'Same Book', audioFiles: [af(111)], isMissing: true, createdAt: NEW })
+      const progress = await createProgress(user.id, missingBook)
+
+      await relinkToPresent(missingItem.id)
+
+      await progress.reload()
+      expect(progress.mediaItemId).to.equal(missingBook.id)
+    })
+
+    it('does not relink to another missing item', async () => {
+      const user = await createUser('reader')
+      const { book: oldBook, item: oldItem } = await createBookItem({ title: 'Same Book', audioFiles: [af(111)], isMissing: true, createdAt: OLD })
+      const progress = await createProgress(user.id, oldBook)
+      await createBookItem({ title: 'Same Book', audioFiles: [af(111)], isMissing: true, createdAt: NEW })
+
+      await relinkToPresent(oldItem.id)
+
+      await progress.reload()
+      expect(progress.mediaItemId).to.equal(oldBook.id)
+    })
+
+    it('does not move a row for a user who already has progress on the present book', async () => {
+      const userA = await createUser('a')
+      const userB = await createUser('b')
+      const { book: oldBook, item: oldItem } = await createBookItem({ title: 'Same Book', audioFiles: [af(111)], isMissing: true, createdAt: OLD })
+      const progressA = await createProgress(userA.id, oldBook)
+      const progressB = await createProgress(userB.id, oldBook)
+      const { book: newBook } = await createBookItem({ title: 'Same Book', audioFiles: [af(111)], createdAt: NEW })
+      await createProgress(userB.id, newBook, { isFinished: false, currentTime: 42 })
+
+      await relinkToPresent(oldItem.id)
+
+      await progressA.reload()
+      await progressB.reload()
+      expect(progressA.mediaItemId).to.equal(newBook.id)
+      expect(progressB.mediaItemId).to.equal(oldBook.id)
+    })
+
+    it('relinks nothing when two present items match (ambiguous)', async () => {
+      const user = await createUser('reader')
+      const { book: oldBook, item: oldItem } = await createBookItem({ title: 'Same Book', audioFiles: [af(111)], isMissing: true, createdAt: OLD })
+      const progress = await createProgress(user.id, oldBook)
+      await createBookItem({ title: 'Same Book', audioFiles: [af(111)], createdAt: NEW })
+      await createBookItem({ title: 'Same Book', audioFiles: [af(111)], createdAt: NEW })
+
+      await relinkToPresent(oldItem.id)
+
+      await progress.reload()
+      expect(progress.mediaItemId).to.equal(oldBook.id)
+    })
+
+    it('does not relink when the present item ASIN disagrees', async () => {
+      const user = await createUser('reader')
+      const { book: oldBook, item: oldItem } = await createBookItem({ title: 'Same Book', asin: 'B000000001', audioFiles: [af(111)], isMissing: true, createdAt: OLD })
+      const progress = await createProgress(user.id, oldBook)
+      await createBookItem({ title: 'Same Book', asin: 'B000000002', audioFiles: [af(111)], createdAt: NEW })
+
+      await relinkToPresent(oldItem.id)
+
+      await progress.reload()
+      expect(progress.mediaItemId).to.equal(oldBook.id)
+    })
+
+    it('ignores a present item in a different library', async () => {
+      const user = await createUser('reader')
+      const { book: oldBook, item: oldItem } = await createBookItem({ title: 'Elsewhere', audioFiles: [af(321)], isMissing: true, createdAt: OLD })
+      const progress = await createProgress(user.id, oldBook)
+
+      const otherLibrary = await Database.libraryModel.create({ name: 'Other', mediaType: 'book' })
+      const otherFolder = await Database.libraryFolderModel.create({ path: '/other', libraryId: otherLibrary.id })
+      const otherBook = await Database.bookModel.create({ title: 'Elsewhere', duration: 100, audioFiles: [af(321)], tags: [], narrators: [], genres: [], chapters: [] })
+      await Database.libraryItemModel.create({ path: '/other/Elsewhere', relPath: 'Elsewhere', mediaId: otherBook.id, mediaType: 'book', libraryId: otherLibrary.id, libraryFolderId: otherFolder.id, isMissing: false, libraryFiles: [], createdAt: NEW })
+
+      await relinkToPresent(oldItem.id)
+
+      await progress.reload()
+      expect(progress.mediaItemId).to.equal(oldBook.id)
+    })
   })
 })

@@ -300,6 +300,24 @@ describe('BookScanner.rescanExistingBookLibraryItem - item left with no media fi
     expect(savedBook.audioFiles.map((f) => f.metadata.size)).to.deep.equal([111, 222])
   })
 
+  it('relinks media progress to a copy that was already scanned in as a new item', async () => {
+    const libraryItem = await createBookItem([lf('Old', '01.mp3', '1', 111), lf('Old', '02.mp3', '2', 222)])
+    const user = await Database.userModel.create({ username: 'reader', pash: 'hash', token: 'token', type: 'user', isActive: true, permissions: {}, bookmarks: [], extraData: {} })
+    const progress = await Database.mediaProgressModel.create({ userId: user.id, mediaItemId: libraryItem.mediaId, mediaItemType: 'book', duration: 200, currentTime: 0, isFinished: true, extraData: { libraryItemId: libraryItem.id } })
+
+    // Copy of the book scanned in while the original was still there
+    const copyBook = await Database.bookModel.create({ title: 'Moved Book', duration: 200, audioFiles: [af(lf('New', '01.mp3', '11', 111), 100), af(lf('New', '02.mp3', '12', 222), 100)], tags: [], narrators: [], genres: [], chapters: [] })
+    const copyLibraryItem = await Database.libraryItemModel.create({ ino: 'ino-New', path: '/lib/New', relPath: 'New', mediaId: copyBook.id, mediaType: 'book', libraryId: library.id, libraryFolderId: libraryFolder.id, isMissing: false, libraryFiles: [], createdAt: new Date(Date.now() + 60000) })
+
+    // Originals removed later
+    await rescan(libraryItem.id, scanData('Old', []))
+
+    await progress.reload()
+    expect(progress.mediaItemId).to.equal(copyBook.id)
+    expect(progress.extraData.libraryItemId).to.equal(copyLibraryItem.id)
+    expect(progress.isFinished).to.be.true
+  })
+
   it('leaves the missing item matchable by findMissingBookLibraryItemMatch', async () => {
     const libraryItem = await createBookItem([lf('Old', '01.mp3', '1', 111), lf('Old', '02.mp3', '2', 222)])
     await rescan(libraryItem.id, scanData('Old', []))

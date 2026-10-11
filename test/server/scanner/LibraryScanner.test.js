@@ -21,6 +21,7 @@ describe('LibraryScanner.scanFolderUpdates', () => {
 
   let calls
   let libraryItemModel
+  let mediaProgressModel
   let existingPaths
   let libraryItemsByPath
 
@@ -43,6 +44,13 @@ describe('LibraryScanner.scanFolderUpdates', () => {
       findOneExpanded: sinon.stub().callsFake(async (where) => (where.path || []).map((path) => libraryItemsByPath[path]).find((li) => li) || null)
     }
     sinon.stub(Database, 'libraryItemModel').get(() => libraryItemModel)
+
+    mediaProgressModel = {
+      relinkToPresentItem: sinon.stub().callsFake(async (libraryItem) => {
+        calls.push(`relink ${libraryItem.id}`)
+      })
+    }
+    sinon.stub(Database, 'mediaProgressModel').get(() => mediaProgressModel)
 
     sinon.stub(LibraryItemScanner, 'scanLibraryItem').callsFake(async (libraryItemId) => {
       calls.push(`rescan ${libraryItemId}`)
@@ -76,7 +84,7 @@ describe('LibraryScanner.scanFolderUpdates', () => {
 
     const results = await LibraryScanner.scanFolderUpdates(library, folder, { New: ['01.mp3'], Old: ['01.mp3'] })
 
-    expect(calls).to.deep.equal(['save old-item isMissing=true', 'new /lib/New'])
+    expect(calls).to.deep.equal(['save old-item isMissing=true', 'relink old-item', 'new /lib/New'])
     expect(results).to.deep.equal({ Old: ScanResult.REMOVED, New: ScanResult.ADDED })
   })
 
@@ -98,7 +106,7 @@ describe('LibraryScanner.scanFolderUpdates', () => {
 
     await LibraryScanner.scanFolderUpdates(library, folder, { A: ['01.mp3'], B: ['01.mp3'] })
 
-    expect(calls).to.deep.equal(['rescan item-b', 'save item-a isMissing=true'])
+    expect(calls).to.deep.equal(['rescan item-b', 'save item-a isMissing=true', 'relink item-a'])
   })
 
   it('ignores a removed path that has no library item', async () => {
